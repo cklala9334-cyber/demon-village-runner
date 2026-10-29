@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>마계마을 · 붉은 달의 길</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;min-height:100%;background:#0d0715;color:#f4d7aa;font-family:system-ui,'Malgun Gothic',sans-serif}body{display:grid;place-items:center}.wrap{width:min(1100px,100%);padding:14px}.top{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:8px}.title{font-size:clamp(18px,3vw,28px);font-weight:900}.pill{display:inline-block;background:#241329;border:1px solid #743654;border-radius:99px;padding:7px 12px;font-weight:800}.stage{position:relative;border:3px solid #63304c;border-radius:12px;overflow:hidden;background:#23132f}canvas{display:block;width:100%;aspect-ratio:2/1;image-rendering:pixelated}.overlay{position:absolute;inset:0;display:grid;place-items:center;background:#0b0514bb}.overlay[hidden]{display:none}.card{width:min(88%,430px);text-align:center;background:#27132f;border:2px solid #b54d5c;border-radius:14px;padding:22px;box-shadow:0 0 40px #ff693333}.card h1{margin:0 0 10px}.card p{line-height:1.6;color:#ead0df}.btn{background:#d45d4c;color:#fff0c6;border:0;border-radius:8px;padding:11px 24px;font-weight:900;font-size:16px;cursor:pointer}.controls{padding-top:9px;color:#caa7ca;font-size:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center}.touch{display:flex;gap:8px;margin-left:auto}.touch button{background:#34213d;border:1px solid #9a4d65;color:#fff;border-radius:8px;min-width:48px;min-height:44px;font-size:20px;touch-action:none}@media(max-width:600px){.wrap{padding:6px}.top{align-items:flex-start}.pill{padding:5px 7px;font-size:12px}.title{max-width:58%}.stage{margin-top:4px}.controls{font-size:12px}}
+</style>
+<style>.touch{flex-wrap:wrap;justify-content:flex-end}</style>
+<style>@media(max-width:600px){.overlay{position:relative;inset:auto;padding:8px;background:#170d1c}.overlay .card{width:100%;padding:12px;box-shadow:none}.overlay .card h1{font-size:22px}.overlay .card p{font-size:13px;margin:8px 0}.overlay .btn{padding:9px 18px}}</style>
+</head>
+<body><main class="wrap"><div class="top"><div class="title">⛓ 마계마을 · 붉은 달의 길</div><div><span class="pill" id="score">점수 0</span> <span class="pill" id="health">♥ ♥ ♥</span> <span class="pill" id="state">준비</span></div></div><div class="stage"><canvas id="game" width="960" height="480" role="img" aria-label="마계마을 달리기 게임 화면"></canvas><div class="overlay" id="overlay"><div class="card"><h1 id="overlay-title">붉은 달의 길</h1><p id="overlay-text">그림 속 발판을 따라 성문까지 가세요. 쇠사슬 사다리에서는 ↑ ↓로 오르내립니다.<br>← → 이동 · SPACE 점프 · J 공격</p><button class="btn" id="start">탐험 시작</button></div></div></div><div class="controls"><span>← → 이동 · SPACE 점프 · 사다리 ↑ ↓ · J 공격 · P 일시정지</span><span>불꽃 수집 · 적 격퇴 · 성문 도착</span><span id="renderer">렌더러 확인 중</span><div class="touch"><button data-key="ArrowLeft" aria-label="왼쪽">◀</button><button data-key="ArrowRight" aria-label="오른쪽">▶</button><button data-key="ArrowUp" aria-label="사다리 오르기">⇧</button><button data-key="ArrowDown" aria-label="사다리 내려가기">⇩</button><button data-key="Space" aria-label="점프">⤴</button><button data-key="KeyJ" aria-label="공격">✦</button></div></div></main>
+<script>
+(()=>{
+const canvas=document.querySelector('#game'),paint=document.createElement('canvas'),overlay=document.querySelector('#overlay'),scoreEl=document.querySelector('#score'),healthEl=document.querySelector('#health'),stateEl=document.querySelector('#state');paint.width=canvas.width;paint.height=canvas.height;const c=paint.getContext('2d');
+const backdrop=new Image();backdrop.src='assets/demon-village-background.png';
+const demonSheet=new Image();demonSheet.src='assets/demon-run-atlas.png';
+const demonRunFrames=Array.from({length:6},(_,i)=>({x:i*256,y:0,w:256,h:256}));
+// This game draws its own demon. It has no dependency on the witch-and-cat game.
+// The artwork and collision geometry share one world coordinate system.
+const W=960,H=480,GOAL_X=1680,MAX_CAMERA=814;
+const plats=[{x:-100,y:425,w:1120},{x:640,y:275,w:260},{x:1090,y:340,w:155},{x:1280,y:245,w:495},{x:1370,y:475,w:405}];
+const ladders=[{x:830,top:275,bottom:425},{x:1625,top:245,bottom:475}];
+const sparks=[{x:350,y:370},{x:780,y:225},{x:1160,y:290},{x:1480,y:195}];
+const enemyStarts=[{x:975,y:425},{x:1500,y:475},{x:1625,y:245}];
+let run=false,paused=false,t=0,last=0,cam=0,score=0,hearts=3,checkpoint=140,invincibleUntil=0,shotAt=0,shots=[],enemies=[],popups=[],got=new Set(),keys={},touchAssistUntil=0,facing=1,p={x:140,y:425,vy:0,on:true};const wx=x=>x-cam;
+function showScore(){scoreEl.textContent='점수 '+Math.floor(score)+' · 불꽃 '+got.size}
+function collectSpark(q,i){got.add(i);score+=100;popups.push({x:q.x,y:q.y,at:t});showScore();if(scoreEl.animate)scoreEl.animate([{transform:'scale(1)',color:'#f4d7aa'},{transform:'scale(1.22)',color:'#ffb84e'},{transform:'scale(1)',color:'#f4d7aa'}],{duration:450})}
+function reset(){p={x:140,y:425,vy:0,on:true};cam=0;score=0;hearts=3;checkpoint=140;facing=1;got.clear();shots=[];popups=[];enemies=enemyStarts.map((e,i)=>({...e,home:e.x,phase:i*1.7,alive:true}));touchAssistUntil=0;invincibleUntil=t+1;showScore()}
+function start(){reset();run=true;paused=false;overlay.hidden=true;stateEl.textContent='탐험 중'}
+function end(win){run=false;overlay.hidden=false;stateEl.textContent=win?'완주':'게임 종료';document.querySelector('#overlay-title').textContent=win?'마왕성 도착!':'다시 도전!';document.querySelector('#overlay-text').textContent=win?`최종 점수 ${Math.floor(score)}점 · 불꽃 ${got.size}개 수집`:`최종 점수 ${Math.floor(score)}점 · 적을 피해 다시 달려보세요.`;document.querySelector('#start').textContent='다시 시작'}
+function jump(touch=false){if(!run){start();return}if(!paused&&p.on){p.vy=-750;p.on=false;if(touch)touchAssistUntil=t+1.05}}
+function attack(){if(!run||paused||t-shotAt<.38)return;shotAt=t;shots.push({x:p.x+28*facing,y:p.y-48,dir:facing,life:1.2})}
+document.querySelector('#start').onclick=start;
+window.addEventListener('keydown',e=>{keys[e.code]=true;if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Space'].includes(e.code))e.preventDefault();if(e.code==='ArrowLeft')facing=-1;if(e.code==='ArrowRight')facing=1;if(e.code==='Space'&&!e.repeat)jump();if(e.code==='KeyJ'&&!e.repeat)attack();if(e.code==='KeyP'&&run){paused=!paused;stateEl.textContent=paused?'일시정지':'탐험 중'}});
+window.addEventListener('keyup',e=>{keys[e.code]=false});
+document.querySelectorAll('[data-key]').forEach(b=>{const key=b.dataset.key;b.addEventListener('pointerdown',e=>{e.preventDefault();keys[key]=true;if(key==='ArrowLeft')facing=-1;if(key==='ArrowRight')facing=1;if(key==='Space')jump(true);if(key==='KeyJ')attack();b.setPointerCapture(e.pointerId)});b.addEventListener('pointerup',()=>keys[key]=false);b.addEventListener('pointercancel',()=>keys[key]=false)});
+function poly(points,color){c.fillStyle=color;c.beginPath();points.forEach(([x,y],i)=>i?c.lineTo(x,y):c.moveTo(x,y));c.closePath();c.fill()}
+function rect(x,y,w,h,color){c.fillStyle=color;c.fillRect(x,y,w,h)}
+function background(){let sky=c.createLinearGradient(0,0,0,H);sky.addColorStop(0,'#23122f');sky.addColorStop(.55,'#78374a');sky.addColorStop(1,'#2d1429');rect(0,0,W,H,sky);c.fillStyle='#e07d76';c.beginPath();c.arc(wx(760),100,55,0,Math.PI*2);c.fill();c.fillStyle='#f9b183';c.beginPath();c.arc(wx(748),87,44,0,Math.PI*2);c.fill();for(let i=0;i<50;i++){let x=((i*163-cam*.18)%1030+1030)%1030,y=20+(i*71)%230;rect(x,y,i%5===0?3:2,2,'#e9b08e')}for(let i=0;i<9;i++){let x=wx(i*220-80)*.45+160;poly([[x,330],[x+75,155+(i%3)*30],[x+160,330]],'#542643')}for(let i=0;i<11;i++){let x=wx(i*200-120)*.7+130,y=230+(i%3)*18;rect(x,y,78,120,'#3a1b3d');poly([[x-12,y],[x+39,y-54],[x+90,y]],'#642e49');rect(x+30,y+35,17,27,'#e88b59');rect(x+56,y+55,11,19,'#e88b59')}let x=wx(1470)*.6+240;rect(x,126,200,190,'#301934');rect(x+25,70,44,90,'#301934');rect(x+135,42,42,116,'#301934');poly([[x-15,126],[x+45,45],[x+100,126]],'#301934');poly([[x+100,126],[x+153,8],[x+210,126]],'#301934');rect(x+92,222,25,94,'#bf604f');}
+function paintBackdrop(){if(backdrop.complete&&backdrop.naturalWidth){c.drawImage(backdrop,-cam,-65,1774,800);rect(0,0,W,H,'#10091a16')}else{background();props()}}
+function props(){for(let i=0;i<12;i++){let x=wx(i*245+15),y=300+(i%3)*24;rect(x,y,75,100,'#482442');poly([[x-10,y],[x+37,y-49],[x+86,y]],'#7e3b53');rect(x+23,y+31,15,20,'#f2a461')}let x=wx(1830);rect(x,135,130,130,'#75434c');rect(x+10,157,110,9,'#ae5b50');c.fillStyle='#ff9a53';c.beginPath();c.arc(x+60,255,19,Math.PI,0);c.fill()}
+function platform(q){const x=wx(q.x);if(x+q.w<0||x>W)return;rect(x,q.y-2,q.w,4,'#f68eaa91');rect(x,q.y+2,q.w,3,'#1d0d2499');rect(x,q.y+5,8,8,'#ff9a6066');rect(x+q.w-8,q.y+5,8,8,'#ff9a6066')}
+function drawLadders(){ladders.forEach(l=>{const x=wx(l.x);if(x<-30||x>W+30)return;c.strokeStyle='#24121ed9';c.lineWidth=5;c.beginPath();c.moveTo(x-12,l.top);c.lineTo(x-12,l.bottom);c.moveTo(x+12,l.top);c.lineTo(x+12,l.bottom);c.stroke();c.strokeStyle='#ae7871';c.lineWidth=3;for(let y=l.top+10;y<l.bottom;y+=15){c.beginPath();c.moveTo(x-12,y);c.lineTo(x+12,y);c.stroke()}})}
+function demon(){
+  if(demonSheet.complete&&demonSheet.naturalWidth===1536){
+    const moving=p.on&&(keys.ArrowLeft||keys.ArrowRight||t<touchAssistUntil);
+    const frame=demonRunFrames[p.on&&moving?Math.floor(t*12)%demonRunFrames.length:0];
+    c.save();c.translate(Math.round(wx(p.x)),Math.round(p.y));c.scale(facing,1);
+    c.imageSmoothingEnabled=false;
+    c.drawImage(demonSheet,frame.x,frame.y,frame.w,frame.h,-50,-105,100,105);
+    c.restore();return;
+  }
+  const runFrames=[{leg:0,bob:0,arm:0},{leg:2,bob:1,arm:-1},{leg:3,bob:2,arm:-2},{leg:0,bob:1,arm:0},{leg:-2,bob:0,arm:1},{leg:-3,bob:1,arm:2}];
+  const moving=p.on&&(keys.ArrowLeft||keys.ArrowRight||t<touchAssistUntil);
+  const frame=p.on?runFrames[moving?Math.floor(t*13)%runFrames.length:0]:{leg:2,bob:0,arm:-2};
+  const stride=frame.leg;
+  c.save();c.translate(Math.round(wx(p.x)),Math.round(p.y-frame.bob*3));c.scale(4*facing,4);
+  const px=(x,y,w,h,color)=>rect(x,y,w,h,color);
+  // A side-facing, hand-built pixel sprite unique to this game.
+  px(-4,-30,3,4,'#281628');px(5,-31,3,5,'#281628');px(-6,-27,2,3,'#6f4a71');px(7,-28,2,3,'#6f4a71');
+  px(-8,-26,17,14,'#b88aa5');px(-7,-25,15,2,'#d1a2b3');px(8,-22,3,4,'#b88aa5');px(3,-21,2,2,'#fff0c9');px(4,-21,1,2,'#2a2030');px(8,-17,2,1,'#743d5d');
+  px(-10,-13,3,8,'#43203f');px(-14,-11,4,5,'#512748');px(8,-13,5,8,'#43203f');px(12,-11,4,5,'#512748');
+  px(-7,-13,15,10,'#4a284d');px(-5,-12,9,2,'#91445c');px(-8,-7,4,8,'#ac5265');px(-9,0,5,2,'#ad4e61');
+  px(6,-11+frame.arm,4,3,'#80607a');px(9,-9+frame.arm,5,3,'#80607a');px(13,-8+frame.arm,2,2,'#c79ca4');
+  px(-5,-3,4,4+stride,'#6e526f');px(3,-3,4,4-stride,'#6e526f');px(-7,0+stride,7,2,'#291d32');px(2,0-stride,7,2,'#291d32');
+  px(-9,-9,3,2,'#8d3b5e');px(-12,-8,3,2,'#8d3b5e');px(-14,-10,2,2,'#bf5b69');
+  c.restore();
+}
+function drawEnemies(){enemies.forEach(e=>{if(!e.alive)return;let x=wx(e.x),y=e.y-22;if(x<-50||x>W+50)return;c.fillStyle='#181325';c.beginPath();c.ellipse(x,y,23,19,0,0,7);c.fill();poly([[x-16,y-12],[x-20,y-30],[x-3,y-18]],'#181325');poly([[x+16,y-12],[x+20,y-30],[x+3,y-18]],'#181325');rect(x-13,y-3,8,5,'#ff8060');rect(x+5,y-3,8,5,'#ff8060');rect(x-16,y+13,11,9,'#422239');rect(x+5,y+13,11,9,'#422239')})}
+function drawGate(){const x=wx(GOAL_X);if(x<-80||x>W+80)return;c.save();c.shadowColor='#ffb65e';c.shadowBlur=20;c.strokeStyle='#ffc16e';c.lineWidth=4;c.beginPath();c.arc(x,204,18+Math.sin(t*4)*2,0,Math.PI*2);c.stroke();c.restore();c.fillStyle='#ffe2a0';c.font='bold 15px system-ui';c.fillText('성문',x-17,170)}
+function drawPickupEffects(){popups.forEach(e=>{const age=t-e.at;if(age>=.8)return;c.save();c.globalAlpha=1-age/.8;c.textAlign='center';c.font='bold 25px system-ui';c.fillStyle='#4d1739';c.fillText('+100',wx(e.x)+2,e.y-24-age*45+2);c.fillStyle='#ffe49a';c.fillText('+100',wx(e.x),e.y-24-age*45);c.restore()})}
+function draw(){paintBackdrop();plats.forEach(platform);drawLadders();drawGate();sparks.forEach((q,i)=>{if(!got.has(i)){let x=wx(q.x),y=q.y+Math.sin(t*5+i)*4;c.fillStyle='#ffca68';c.beginPath();c.arc(x,y,11,0,Math.PI*2);c.fill();poly([[x-16,y],[x,y-16],[x+16,y],[x,y+16]],'#fff0ac')}});drawEnemies();shots.forEach(s=>{let x=wx(s.x);c.fillStyle='#ffbd73';c.beginPath();c.arc(x,s.y,9,0,7);c.fill();poly([[x-14,s.y],[x,s.y-14],[x+14,s.y],[x,s.y+14]],'#fff0b2')});if(t>invincibleUntil||Math.floor(t*12)%2===0)demon();drawPickupEffects();rect(12,12,235,36,'#291629aa');c.fillStyle='#fff1cf';c.font='bold 16px system-ui';c.fillText('성문까지 '+Math.max(0,Math.round(GOAL_X-p.x))+'m',24,36);if(checkpoint>140){rect(12,52,154,29,'#291629aa');c.fillStyle='#ffe6b0';c.font='bold 13px system-ui';c.fillText('중간 지점 저장됨',23,72)}healthEl.textContent='♥ '.repeat(hearts)+'♡ '.repeat(3-hearts);if(paused){rect(0,0,W,H,'#0b051488');c.fillStyle='#fff0d0';c.textAlign='center';c.font='bold 48px system-ui';c.fillText('일시정지',W/2,H/2);c.textAlign='start'}}
+function damage(){if(t<invincibleUntil||!run)return;hearts--;invincibleUntil=t+1.4;touchAssistUntil=0;shots=[];if(hearts<=0){end(false);return}p={x:checkpoint,y:checkpoint>140?340:425,vy:0,on:true};cam=Math.max(0,Math.min(MAX_CAMERA,p.x-230))}
+function update(dt){
+  let d=(keys.ArrowRight?1:0)-(keys.ArrowLeft?1:0);
+  if(!d&&t<touchAssistUntil)d=1;
+  p.x=Math.max(0,Math.min(1740,p.x+d*350*dt));
+  const ladder=ladders.find(l=>Math.abs(p.x-l.x)<28&&p.y>=l.top-12&&p.y<=l.bottom+12);
+  const climb=(keys.ArrowDown?1:0)-(keys.ArrowUp?1:0);
+  if(ladder&&climb){p.x=ladder.x;p.y=Math.max(ladder.top,Math.min(ladder.bottom,p.y+climb*230*dt));p.vy=0;p.on=false;touchAssistUntil=0}
+  else{const previousY=p.y;p.vy+=1400*dt;p.y+=p.vy*dt;p.on=false;for(const q of plats){if(p.x>q.x-12&&p.x<q.x+q.w&&previousY<=q.y+2&&p.y>=q.y&&p.vy>=0){p.y=q.y;p.vy=0;p.on=true;break}}}
+  if(p.x>1100&&p.y<=345)checkpoint=1105;
+  sparks.forEach((q,i)=>{if(!got.has(i)&&Math.hypot(p.x-q.x,p.y-40-q.y)<38)collectSpark(q,i)});
+  enemies.forEach(e=>{if(!e.alive)return;e.x=e.home+Math.sin(t*2+e.phase)*22;if(Math.abs(p.x-e.x)<29&&Math.abs((p.y-55)-(e.y-26))<65)damage()});
+  shots.forEach(s=>{s.x+=650*s.dir*dt;s.life-=dt;enemies.forEach(e=>{if(e.alive&&Math.abs(s.x-e.x)<27&&Math.abs(s.y-(e.y-28))<46){e.alive=false;s.life=0;score+=150;showScore()}})});
+  shots=shots.filter(s=>s.life>0);popups=popups.filter(e=>t-e.at<.8);
+  cam+=(Math.max(0,Math.min(MAX_CAMERA,p.x-230))-cam)*Math.min(1,dt*5);
+  if(p.x>=GOAL_X&&p.y<300){score+=500;showScore();end(true)}else if(p.y>H+80)damage();
+}
+let present=()=>canvas.getContext('2d').drawImage(paint,0,0);
+function setupWebGL(){
+  const screen=document.createElement('canvas');screen.width=W;screen.height=H;screen.setAttribute('role','img');screen.setAttribute('aria-label','마계마을 달리기 게임 화면');
+  const gl=screen.getContext('webgl',{alpha:false,antialias:false,preserveDrawingBuffer:true});if(!gl)return false;
+  const shader=(type,source)=>{const s=gl.createShader(type);gl.shaderSource(s,source);gl.compileShader(s);return gl.getShaderParameter(s,gl.COMPILE_STATUS)?s:null};
+  const vs=shader(gl.VERTEX_SHADER,'attribute vec2 a;varying vec2 v;void main(){v=(a+1.0)*0.5;gl_Position=vec4(a,0.0,1.0);}');
+  const fs=shader(gl.FRAGMENT_SHADER,'precision mediump float;varying vec2 v;uniform sampler2D tex;void main(){gl_FragColor=texture2D(tex,v);}');
+  if(!vs||!fs)return false;
+  const program=gl.createProgram();gl.attachShader(program,vs);gl.attachShader(program,fs);gl.linkProgram(program);if(!gl.getProgramParameter(program,gl.LINK_STATUS))return false;
+  gl.useProgram(program);const buffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);const loc=gl.getAttribLocation(program,'a');gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+  const texture=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,texture);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);gl.uniform1i(gl.getUniformLocation(program,'tex'),0);gl.viewport(0,0,W,H);
+  canvas.after(screen);canvas.style.display='none';present=()=>{gl.bindTexture(gl.TEXTURE_2D,texture);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,paint);gl.drawArrays(gl.TRIANGLE_STRIP,0,4)};return true;
+}
+document.querySelector('#renderer').textContent=setupWebGL()?'WebGL 화면':'2D 호환 화면';
+function loop(ms){let dt=Math.min(.033,(ms-last)/1000||0);last=ms;t+=dt;if(run&&!paused)update(dt);draw();present();requestAnimationFrame(loop)}requestAnimationFrame(loop);
+})();
+</script></body></html>
